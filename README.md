@@ -9,6 +9,6 @@ mdserver-web|qbittorrent管理
 * 在mdserver-web点击`添加插件`
 ```
 
- ### 截图	
+### 截图	
 
- [![截图1](/screenshot/ss1.jpg)](/screenshot/ss1.jpg)
+[![截图1](/screenshot/ss1.jpg)](/screenshot/ss1.jpg)
