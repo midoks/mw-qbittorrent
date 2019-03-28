@@ -10,17 +10,41 @@ sysName=`uname`
 
 install_tmp=${rootPath}/tmp/bt_install.pl
 
+#https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+
+Install_mac_ffmpeg()
+{
+	if [ ! -f $serverPath/source/ffmpeg-20180702-3c4af57-macos64-static.zip ];then
+		wget -O $serverPath/source/ffmpeg-20180702-3c4af57-macos64-static.zip https://ffmpeg.zeranoe.com/builds/macos64/static/ffmpeg-20180702-3c4af57-macos64-static.zip
+	fi
+
+	if [ ! -f $serverPath/lib/ffmpeg ];then
+		cd $serverPath/source && tar -xvf $serverPath/source/ffmpeg-20180702-3c4af57-macos64-static.zip
+		mv ffmpeg-20180702-3c4af57-macos64-static $serverPath/lib/ffmpeg
+	fi
+}
+
+Install_linux_ffmpeg()
+{
+	if [ ! -f $serverPath/source/ffmpeg-release-amd64-static.tar.xz ];then
+		wget -O $serverPath/source/ffmpeg-release-amd64-static.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+	fi
+
+	if [ ! -f $serverPath/lib/ffmpeg ];then
+		cd $serverPath/source && tar -xvf $serverPath/source/ffmpeg-release-amd64-static.tar.xz
+		mv ffmpeg-4.1.2-amd64-static $serverPath/lib/ffmpeg
+	fi
+}
 
 Install_qbittorrent()
 {
 	if [ $sysName == 'Darwin' ]; then
-		echo 'apple system'
+		Install_mac_ffmpeg
 	else
 		yum -y install qbittorrent-nox
-		#安装Nux-Dextop源
-		sudo rpm --import http://li.nux.ro/download/nux/RPM-GPG-KEY-nux.ro 
-		sudo rpm -Uvh http://li.nux.ro/download/nux/dextop/el7/x86_64/nux-dextop-release-0-1.el7.nux.noarch.rpm
-		yum install -y ffmpeg
+		#qbittorrent-nox -d
+
+		Install_linux_ffmpeg
 	fi
 
 	pip install python-qbittorrent

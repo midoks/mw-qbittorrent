@@ -11,7 +11,7 @@ sys.path.append(os.getcwd() + "/class/core")
 import public
 
 reload(sys)
-sys.setdefaultencoding("utf8")
+sys.setdefaultencoding('utf8')
 
 sys.path.append('/usr/local/lib/python2.7/site-packages')
 
@@ -83,6 +83,12 @@ def getRunLog():
     return file
 
 
+def contentReplace(content):
+    service_path = public.getServerDir()
+    content = content.replace('{$SERVER_PATH}', service_path)
+    return content
+
+
 def initDreplace():
 
     ddir = getServerDir() + '/workers'
@@ -94,6 +100,7 @@ def initDreplace():
     if not os.path.exists(cfg):
         cfg_tpl = getPluginDir() + '/conf/qb.conf'
         content = public.readFile(cfg_tpl)
+        content = contentReplace(content)
         public.writeFile(cfg, content)
 
     file_tpl = getInitDTpl()
@@ -107,7 +114,7 @@ def initDreplace():
     # initd replace
     if not os.path.exists(file_bin):
         content = public.readFile(file_tpl)
-        content = content.replace('{$SERVER_PATH}', service_path)
+        content = contentReplace(content)
         public.writeFile(file_bin, content)
         public.execShell('chmod +x ' + file_bin)
 
@@ -126,6 +133,8 @@ def start():
     file = initDreplace()
 
     data = public.execShell(file + ' start')
+
+    # public.execShell('qbittorrent-nox -d')
     if data[1] == '':
         return 'ok'
     return data[1]
@@ -134,6 +143,7 @@ def start():
 def stop():
     file = initDreplace()
     data = public.execShell(file + ' stop')
+    # public.execShell('ps -ef | grep qbittorrent-nox | xargs kill ')
     if data[1] == '':
         return 'ok'
     return data[1]
@@ -176,6 +186,7 @@ def initdInstall():
     initd_bin = getInitDFile()
     shutil.copyfile(mysql_bin, initd_bin)
     public.execShell('chmod +x ' + initd_bin)
+    public.execShell('chkconfig --add ' + getPluginName())
     return 'ok'
 
 
@@ -185,6 +196,7 @@ def initdUinstall():
             return "Apple Computer does not support"
     initd_bin = getInitDFile()
     os.remove(initd_bin)
+    public.execShell('chkconfig --del ' + getPluginName())
     return 'ok'
 
 

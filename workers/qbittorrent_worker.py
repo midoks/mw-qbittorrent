@@ -28,7 +28,6 @@ sys.path.append('/usr/local/lib/python2.7/site-packages')
 # import pygeoip
 import MySQLdb as mdb
 
-
 from configparser import ConfigParser
 cp = ConfigParser()
 cp.read("../qb.conf")
@@ -51,14 +50,32 @@ FILE_TO = cp.get(section_file, "FILE_TO")
 FILE_TRANSFER_TO = cp.get(section_file, "FILE_TRANSFER_TO")
 FILE_OWN = cp.get(section_file, "FILE_OWN")
 FILE_GROUP = cp.get(section_file, "FILE_GROUP")
+FILE_ENC_SWITCH = cp.get(section_file, "FILE_ENC_SWITCH")
+FILE_API_URL = cp.get(section_file, "FILE_API_URL")
+
 
 section_task = cp.sections()[3]
 TASK_RATE = cp.getint(section_task, "TASK_RATE")
 TASK_COMPLETED_RATE = cp.getint(section_task, "TASK_COMPLETED_RATE")
+TASK_DEBUG = cp.getint(section_task, "TASK_DEBUG")
 
 
 def formatTime():
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+
+def getRunDir():
+    return os.getcwd()
+
+
+def getRootDir():
+    return os.path.dirname(os.path.dirname(getRunDir()))
+
+rooDir = getRootDir()
+
+ffmpeg_cmd = rooDir + "/lib/ffmpeg/ffmpeg"
+if not os.path.exists(ffmpeg_cmd):
+    ffmpeg_cmd = rooDir + "/lib/ffmpeg/bin/ffmpeg"
 
 
 class downloadBT(Thread):
@@ -122,6 +139,16 @@ class downloadBT(Thread):
         except:
             return False
 
+    def readFile(self, filename):
+        # 读文件内容
+        try:
+            fp = open(filename, 'r')
+            fBody = fp.read()
+            fp.close()
+            return fBody
+        except:
+            return False
+
     def get_transfer_ts_file(self, to):
         return FILE_TRANSFER_TO + '/' + to + '.ts'
 
@@ -131,22 +158,28 @@ class downloadBT(Thread):
     def get_lock_file(self, to):
         return FILE_TRANSFER_TO + '/' + to + '.lock'
 
-    def get_transfer_m3u5_dir(self, dirname):
-        return FILE_TO + '/m3u8/' + dirname
+    def get_transfer_m3u5_dir(self, dirname, fname):
+        return FILE_TO + '/m3u8/' + dirname + '/' + fname
 
     def fg_transfer_mp4_cmd(self, sfile, dfile):
-        cmd = 'ffmpeg -y -i "' + sfile + \
+        cmd = ffmpeg_cmd + ' -y -i "' + sfile + \
             '" -threads 1  -preset veryslow -crf 28 -c:v libx264 -strict -2 ' + dfile
         return cmd
 
     def fg_transfer_ts_cmd(self, file, to_file):
-        cmd = 'ffmpeg -y -i ' + file + \
+        cmd = ffmpeg_cmd + ' -y -i ' + file + \
             ' -s 480x360 -vcodec copy -acodec copy -vbsf h264_mp4toannexb ' + to_file
         return cmd
 
     def fg_m3u8_cmd(self, ts_file, m3u8_file, to_file):
-        cmd = 'ffmpeg -y -i ' + ts_file + ' -c copy -map 0 -f segment -segment_list ' + \
+        cmd = ffmpeg_cmd + ' -y -i ' + ts_file + ' -c copy -map 0 -f segment -segment_list ' + \
             m3u8_file + ' -segment_time 3 ' + to_file
+        return cmd
+
+    def fg_m3u8enc_cmd(self, ts_file, m3u8_file, to_file, enc_dir):
+        cmd = ffmpeg_cmd + ' -y -i ' + ts_file + ' -threads 1 -strict -2 -hls_time 3 -hls_key_info_file "' + \
+            tDir + '/enc.keyinfo.txt" -hls_playlist_type vod -hls_segment_filename ' + \
+            enc_dir + ' ' + m3u8_file
         return cmd
 
     def debug(self, msg):
@@ -167,8 +200,12 @@ class downloadBT(Thread):
         return False
 
     def ffmpeg(self, file=''):
+        if not os.path.exists(FILE_TRANSFER_TO):
+            self.execShell('mkdir -p ' + FILE_TRANSFER_TO)
 
-        md5file = self.md5(file)[0:6]
+        fname = os.path.basename(file)
+        shash = self.sign_torrent['hash']
+        md5file = self.md5(file)
 
         if not os.path.exists(file):
             print formatTime(), 'file not exists:', file
@@ -200,65 +237,126 @@ class downloadBT(Thread):
             print self.debug('ts not exists')
             return
 
-        m3u8_dir = self.get_transfer_m3u5_dir(md5file)
+        md5Fname = self.md5(fname)
+        m3u8_dir = self.get_transfer_m3u5_dir(shash, md5Fname)
         if not os.path.exists(m3u8_dir):
             self.execShell('mkdir -p ' + m3u8_dir)
 
-        m3u8_file = m3u8_dir + '/' + md5file + '.m3u8'
+        m3u8_file = m3u8_dir + '/index.m3u8'
         tofile = m3u8_dir + '/%010d.ts'
-        cmd_m3u8 = self.fg_m3u8_cmd(tsfile, m3u8_file, tofile)
-        print self.debug('cmd_m3u8:' + cmd_m3u8)
-        if not os.path.exists(m3u8_file):
-            os.system(cmd_m3u8)
-            self.execShell('chown -R ' + FILE_OWN + ':' +
-                           FILE_GROUP + ' ' + m3u8_dir)
-            self.add_hash(md5file)
+        print self.debug('tofile:' + tofile)
+        # 加密m3u8
+        if FILE_ENC_SWITCH != '0':
+
+            if os.path.exists(m3u8_file):
+                print self.debug('cmd_m3u8_enc exists:' + m3u8_file)
+                return
+
+            enc_dir = '/tmp/qb_m3u8'
+            self.execShell('mkdir -p ' + enc_dir)
+            self.execShell('openssl rand  -base64 16 > ' +
+                           enc_dir + '/enc.key')
+            self.execShell('rm -rf ' + enc_dir + '/enc.keyinfo.txt')
+
+            fid = self.add_hash(fname, md5file)
+            key = self.readFile(enc_dir + '/enc.key').strip()
+            self.set_hashfile_key(fid, key)
+
+            # FILE_API_URL
+            url = FILE_API_URL.replace('{$KEY}', fid)
+            enc_url = 'echo ' + url + ' >> ' + enc_dir + '/enc.keyinfo.txt'
+            self.execShell(enc_url)
+            enc_path = 'echo ' + enc_dir + '/enc.key >> ' + enc_dir + '/enc.keyinfo.txt'
+            self.execShell(enc_path)
+            enc_iv = 'openssl rand -hex 16 >> ' + enc_dir + '/enc.keyinfo.txt'
+            self.execShell(enc_iv)
+
+            cmd = fg_m3u8enc_cmd(self, tsfile, m3u8_file, to_file, enc_dir)
+            print self.debug('cmd_m3u8_enc:' + cmd)
+            os.system(cmd)
         else:
-            self.add_hash(md5file)
-            print self.debug('m3u8 exists:' + tofile)
 
-    def add_hash_file(self):
-        pass
+            if os.path.exists(m3u8_file):
+                print self.debug('m3u8 exists:' + tofile)
+                return
 
-    def add_hash(self, m3u8_name):
-        print '-------------------------add_hash---start-----------------------'
+            cmd_m3u8 = self.fg_m3u8_cmd(tsfile, m3u8_file, tofile)
+            print self.debug('cmd_m3u8:' + cmd_m3u8)
+            os.system(cmd_m3u8)
+
+            try:
+                self.add_hash(fname, md5file)
+            except Exception as e:
+                print 'add_hash', str(e)
+
+        self.execShell('chown -R ' + FILE_OWN + ':' +
+                       FILE_GROUP + ' ' + m3u8_dir)
+
+    def get_bt_size(self):
+        total_size = '0'
+        if 'size' in self.sign_torrent:
+            total_size = str(self.sign_torrent['size'])
+
+        if 'total_size' in self.sign_torrent:
+            total_size = str(self.sign_torrent['total_size'])
+        return total_size
+
+    def get_hashlist_id(self):
         ct = formatTime()
-        # print (self.sign_torrent)
-        total_size = str(self.sign_torrent['total_size'])
+
+        total_size = self.get_bt_size()
+
         shash = self.sign_torrent['hash']
         sname = self.sign_torrent['name']
+        sname = mdb.escape_string(sname)
 
         info = self.query(
             "select id from pl_hash_list where info_hash='" + shash + "'")
-
-        sname = mdb.escape_string(sname)
         if len(info) > 0:
             pid = str(info[0][0])
-            file_data = self.query(
-                "select id from pl_hash_file where name='" + sname + "' and pid='" + pid + "'")
-            if len(file_data) == 0:
-                self.query("insert into pl_hash_file (`pid`,`name`,`m3u8`,`length`,`create_time`) values('" +
-                           pid + "','" + sname + "','" + m3u8_name + "','" + total_size + "','" + ct + "')")
-            else:
-                print shash, 'already is exists!'
         else:
-            print 'insert into pl_hash_list'
+            print 'insert into pl_hash_list data'
             pid = self.dbcurr.execute("insert into pl_hash_list (`name`,`info_hash`,`length`,`create_time`) values('" +
                                       sname + "','" + shash + "','" + total_size + "','" + ct + "')")
-            file_data = self.query(
-                "select id from pl_hash_file where name='" + sname + "' and pid='" + pid + "'")
-            if len(file_data) == 0:
-                self.query("insert into pl_hash_file (`pid`,`name`,`m3u8`,`length`,`create_time`) values('" +
-                           pid + "','" + sname + "','" + m3u8_name + "','" + total_size + "','" + ct + "')")
-            else:
-                print shash, 'already is exists!'
+        return pid
+
+    def get_hashfile_id(self, fname, m3u8_name, pid):
+        ct = formatTime()
+
+        info = self.query(
+            "select id from pl_hash_file where name='" + fname + "' and pid='" + pid + "'")
+        if len(info) == 0:
+            print 'insert into pl_hash_file data !'
+            fid = self.dbcurr.execute("insert into pl_hash_file (`pid`,`name`,`m3u8`,`create_time`) values('" +
+                                      pid + "','" + fname + "','" + m3u8_name + "','" + ct + "')")
+        else:
+            print fname, ':', m3u8_name, 'already is exists!'
+            fid = str(info[0][0])
+        return fid
+
+    def set_hashfile_key(self, fid, key):
+        self.dbcurr.execute("update pl_hash_file set `key`='" +
+                            mdb.escape_string(key) + "' where id=" + fid)
+
+    def add_hash(self, fname, m3u8_name):
+        print '-------------------------add_hash---start-----------------------'
+
+        pid = self.get_hashlist_id()
+        fid = self.get_hashfile_id(fname, m3u8_name, pid)
+
         print '-------------------------add_hash---end--------------------------'
+
+        return fid
 
     def file_arr(self, path, filters=['.DS_Store']):
         file_list = []
         flist = os.listdir(path)
-        # print flist
+
         for i in range(len(flist)):
+            # 下载缓存文件过滤
+            if flist[i] == '.unwanted':
+                continue
+
             file_path = os.path.join(path, flist[i])
             if flist[i] in filters:
                 continue
@@ -285,8 +383,9 @@ class downloadBT(Thread):
                 self.ffmpeg(path)
         else:
             vlist = self.find_dir_video(path)
-            for i in range(len(vlist)):
-                self.ffmpeg(vlist[i])
+            for v in vlist:
+                self.ffmpeg(v)
+
         return ''
 
     def checkTask(self):
@@ -310,11 +409,12 @@ class downloadBT(Thread):
             if tlen > 0:
                 for torrent in torrents:
                     self.sign_torrent = torrent
-                    # print torrent
                     path = torrent['save_path'] + torrent['name']
                     path = path.encode()
                     try:
                         self.video_do(path)
+                        if TASK_DEBUG == 0:
+                            self.qb.delete_permanently(torrent['hash'])
                     except Exception as e:
                         print formatTime(), str(e)
 
@@ -340,5 +440,3 @@ if __name__ == "__main__":
 
     completed = threading.Thread(target=dl.completed)
     completed.start()
-
-    # test()

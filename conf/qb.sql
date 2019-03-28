@@ -14,7 +14,8 @@ CREATE TABLE `pl_hash_file` (
   `pid` bigint(20)  NOT NULL,
   `name` text NOT NULL,
   `m3u8` varchar(40) NOT NULL,
-  `length` bigint(20) NOT NULL,
+  `key` char(40)  NULL DEFAULT '',
+  `length` bigint(20)  NULL DEFAULT 0,
   `create_time` datetime NOT NULL,
   PRIMARY KEY (`id`),
   KEY `create_time` (`create_time`)
