@@ -25,6 +25,20 @@ sys.setdefaultencoding("utf8")
 
 sys.path.append('/usr/local/lib/python2.7/site-packages')
 
+
+
+
+def formatTime():
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+
+def getRunDir():
+    return os.getcwd()
+
+
+def getRootDir():
+    return os.path.dirname(os.path.dirname(getRunDir()))
+
 # import pygeoip
 import MySQLdb as mdb
 
@@ -52,6 +66,8 @@ FILE_OWN = cp.get(section_file, "FILE_OWN")
 FILE_GROUP = cp.get(section_file, "FILE_GROUP")
 FILE_ENC_SWITCH = cp.get(section_file, "FILE_ENC_SWITCH")
 FILE_API_URL = cp.get(section_file, "FILE_API_URL")
+FILE_ASYNC_SWITCH = cp.get(section_file, "FILE_ASYNC_SWITCH")
+
 
 
 section_task = cp.sections()[3]
@@ -59,20 +75,7 @@ TASK_RATE = cp.getint(section_task, "TASK_RATE")
 TASK_COMPLETED_RATE = cp.getint(section_task, "TASK_COMPLETED_RATE")
 TASK_DEBUG = cp.getint(section_task, "TASK_DEBUG")
 
-
-def formatTime():
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-
-def getRunDir():
-    return os.getcwd()
-
-
-def getRootDir():
-    return os.path.dirname(os.path.dirname(getRunDir()))
-
 rooDir = getRootDir()
-
 ffmpeg_cmd = rooDir + "/lib/ffmpeg/ffmpeg"
 if not os.path.exists(ffmpeg_cmd):
     ffmpeg_cmd = rooDir + "/lib/ffmpeg/bin/ffmpeg"
@@ -198,6 +201,16 @@ class downloadBT(Thread):
             return True
         return False
 
+    def ffmpeg_file_sync(self):
+        print 'file_sync... start'
+
+        runDir = getRunDir()
+
+        if FILE_ASYNC_SWITCH == '1':
+            self.execShell('sh -x ' + runDir+'/rsync.sh')
+        print 'file_sync... end'
+
+
     def ffmpeg(self, file=''):
         if not os.path.exists(FILE_TRANSFER_TO):
             self.execShell('mkdir -p ' + FILE_TRANSFER_TO)
@@ -250,6 +263,7 @@ class downloadBT(Thread):
             if os.path.exists(m3u8_file):
                 print self.debug('cmd_m3u8_enc exists:' + m3u8_file)
                 print self.debug('cmd_m3u8_enc:' + cmd)
+                self.ffmpeg_file_sync()
                 return
 
             
@@ -276,6 +290,7 @@ class downloadBT(Thread):
 
             if os.path.exists(m3u8_file):
                 print self.debug('m3u8 exists:' + tofile)
+                self.ffmpeg_file_sync()
                 return
 
             cmd_m3u8 = self.fg_m3u8_cmd(tsfile, m3u8_file, tofile)
@@ -289,6 +304,8 @@ class downloadBT(Thread):
 
         self.execShell('chown -R ' + FILE_OWN + ':' +
                        FILE_GROUP + ' ' + m3u8_dir)
+
+        self.ffmpeg_file_sync()
 
     def get_bt_size(self):
         total_size = '0'
