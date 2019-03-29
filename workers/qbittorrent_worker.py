@@ -177,9 +177,8 @@ class downloadBT(Thread):
         return cmd
 
     def fg_m3u8enc_cmd(self, ts_file, m3u8_file, to_file, enc_dir):
-        cmd = ffmpeg_cmd + ' -y -i ' + ts_file + ' -threads 1 -strict -2 -hls_time 3 -hls_key_info_file "' + \
-            tDir + '/enc.keyinfo.txt" -hls_playlist_type vod -hls_segment_filename ' + \
-            enc_dir + ' ' + m3u8_file
+        cmd = ffmpeg_cmd + ' -y -i ' + ts_file + ' -threads 1 -strict -2 -hls_time 3 -hls_key_info_file ' + \
+            enc_dir + '/enc.keyinfo.txt -hls_playlist_type vod -hls_segment_filename ' + to_file + ' '+ m3u8_file
         return cmd
 
     def debug(self, msg):
@@ -206,17 +205,16 @@ class downloadBT(Thread):
         fname = os.path.basename(file)
         shash = self.sign_torrent['hash']
         md5file = self.md5(file)
-
         if not os.path.exists(file):
             print formatTime(), 'file not exists:', file
             return
         print self.debug('source file ' + file)
 
+
         mp4file = self.get_transfer_mp4_file(md5file)
         cmd_mp4 = self.fg_transfer_mp4_cmd(file, mp4file)
-        print self.debug('cmd_mp4:' + cmd_mp4)
-
         if not os.path.exists(mp4file):
+            print self.debug('cmd_mp4:' + cmd_mp4)
             os.system(cmd_mp4)
         else:
             print self.debug('mp4 exists:' + mp4file)
@@ -227,8 +225,8 @@ class downloadBT(Thread):
 
         tsfile = self.get_transfer_ts_file(md5file)
         cmd_ts = self.fg_transfer_ts_cmd(mp4file, tsfile)
-        print self.debug('cmd_ts:' + cmd_ts)
         if not os.path.exists(tsfile):
+            print self.debug('cmd_ts:' + cmd_ts)
             os.system(cmd_ts)
         else:
             print self.debug('data_ts exists:' + mp4file)
@@ -247,12 +245,14 @@ class downloadBT(Thread):
         print self.debug('tofile:' + tofile)
         # 加密m3u8
         if FILE_ENC_SWITCH != '0':
-
+            enc_dir = '/tmp/qb_m3u8'
+            cmd = self.fg_m3u8enc_cmd(tsfile, m3u8_file, tofile, enc_dir)
             if os.path.exists(m3u8_file):
                 print self.debug('cmd_m3u8_enc exists:' + m3u8_file)
+                print self.debug('cmd_m3u8_enc:' + cmd)
                 return
 
-            enc_dir = '/tmp/qb_m3u8'
+            
             self.execShell('mkdir -p ' + enc_dir)
             self.execShell('openssl rand  -base64 16 > ' +
                            enc_dir + '/enc.key')
@@ -270,9 +270,7 @@ class downloadBT(Thread):
             self.execShell(enc_path)
             enc_iv = 'openssl rand -hex 16 >> ' + enc_dir + '/enc.keyinfo.txt'
             self.execShell(enc_iv)
-
-            cmd = fg_m3u8enc_cmd(self, tsfile, m3u8_file, to_file, enc_dir)
-            print self.debug('cmd_m3u8_enc:' + cmd)
+    
             os.system(cmd)
         else:
 
