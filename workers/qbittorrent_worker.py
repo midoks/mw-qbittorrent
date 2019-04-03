@@ -4,6 +4,15 @@
 下载检测
 """
 
+'''
+pl_hash_list 表字段 status说明
+
+0 视频资源 - 正常
+1 不含有视频资源
+2 3小时下载未反应
+4 3个月未下载完成
+'''
+
 import hashlib
 import os
 import time
@@ -24,8 +33,6 @@ reload(sys)
 sys.setdefaultencoding("utf8")
 
 sys.path.append('/usr/local/lib/python2.7/site-packages')
-
-
 
 
 def formatTime():
@@ -69,11 +76,16 @@ FILE_API_URL = cp.get(section_file, "FILE_API_URL")
 FILE_ASYNC_SWITCH = cp.get(section_file, "FILE_ASYNC_SWITCH")
 
 
-
 section_task = cp.sections()[3]
 TASK_RATE = cp.getint(section_task, "TASK_RATE")
 TASK_COMPLETED_RATE = cp.getint(section_task, "TASK_COMPLETED_RATE")
 TASK_DEBUG = cp.getint(section_task, "TASK_DEBUG")
+
+section_setting = cp.sections()[4]
+QUEUE_SWITCH = cp.get(section_setting, "QUEUE_SWITCH")
+MAX_ACTIVE_UPLOADS = cp.getint(section_setting, "MAX_ACTIVE_UPLOADS")
+MAX_ACTIVE_TORRENTS = cp.getint(section_setting, "MAX_ACTIVE_TORRENTS")
+MAX_ACTIVE_DOWNLOADS = cp.getint(section_setting, "MAX_ACTIVE_DOWNLOADS")
 
 rooDir = getRootDir()
 ffmpeg_cmd = rooDir + "/lib/ffmpeg/ffmpeg"
@@ -83,28 +95,66 @@ if not os.path.exists(ffmpeg_cmd):
 
 class downloadBT(Thread):
 
+    __db_err = None
+
     def __init__(self):
         Thread.__init__(self)
         self.setDaemon(True)
-        self.dbconn = mdb.connect(
-            DB_HOST, DB_USER, DB_PASS, DB_NAME, port=DB_PORT, charset='utf8')
-        self.dbconn.autocommit(False)
-        self.dbcurr = self.dbconn.cursor()
-        self.dbcurr.execute('SET NAMES utf8')
         self.qb = self.qb()
 
-        _has_suffix = ['mp4', 'rmvb', 'flv', 'avi', 'mpg', 'mkv', 'wmv', 'avi']
+        self.qb.set_preferences(max_active_uploads=MAX_ACTIVE_UPLOADS)
+        self.qb.set_preferences(max_active_torrents=MAX_ACTIVE_TORRENTS)
+        self.qb.set_preferences(max_active_downloads=MAX_ACTIVE_DOWNLOADS)
+
+        _has_suffix = ['mp4', 'rmvb', 'flv', 'avi',
+                       'mpg', 'mkv', 'wmv', 'avi', 'rm']
         has_suffix = []
         for x in range(len(_has_suffix)):
             has_suffix.append('.' + _has_suffix[x])
             has_suffix.append('.' + _has_suffix[x].upper())
         self.has_suffix = has_suffix
 
+    def __conn(self):
+        try:
+            self.dbconn = mdb.connect(
+                DB_HOST, DB_USER, DB_PASS, DB_NAME, port=DB_PORT, charset='utf8')
+            self.dbconn.autocommit(False)
+            self.dbcurr = self.dbconn.cursor()
+            self.dbcurr.execute('SET NAMES utf8')
+            return True
+        except Exception as e:
+            self.__db_err = e
+            return False
+
+    def __close(self):
+        self.dbcurr.close()
+        self.dbconn.close()
+
     def query(self, sql):
-        self.dbcurr.execute(sql)
-        result = self.dbcurr.fetchall()
-        data = map(list, result)
-        return data
+        # 执行SQL语句返回数据集
+        if not self.__conn():
+            return self.__db_err
+        try:
+            self.dbcurr.execute(sql)
+            result = self.dbcurr.fetchall()
+            # print result
+            # 将元组转换成列表
+            data = map(list, result)
+            self.__close()
+            return data
+        except Exception, ex:
+            return ex
+
+    def execute(self, sql):
+        if not self.__conn():
+            return self.__db_err
+        try:
+            result = self.dbcurr.execute(sql)
+            self.dbconn.commit()
+            self.__close()
+            return result
+        except Exception, ex:
+            return ex
 
     def qb(self):
         from qbittorrent import Client
@@ -158,9 +208,6 @@ class downloadBT(Thread):
     def get_transfer_mp4_file(self, to):
         return FILE_TRANSFER_TO + '/' + to + '.mp4'
 
-    def get_lock_file(self, to):
-        return FILE_TRANSFER_TO + '/' + to + '.lock'
-
     def get_transfer_m3u5_dir(self, dirname, fname):
         return FILE_TO + '/m3u8/' + dirname + '/' + fname
 
@@ -181,11 +228,15 @@ class downloadBT(Thread):
 
     def fg_m3u8enc_cmd(self, ts_file, m3u8_file, to_file, enc_dir):
         cmd = ffmpeg_cmd + ' -y -i ' + ts_file + ' -threads 1 -strict -2 -hls_time 3 -hls_key_info_file ' + \
-            enc_dir + '/enc.keyinfo.txt -hls_playlist_type vod -hls_segment_filename ' + to_file + ' '+ m3u8_file
+            enc_dir + '/enc.keyinfo.txt -hls_playlist_type vod -hls_segment_filename ' + \
+            to_file + ' ' + m3u8_file
         return cmd
 
     def debug(self, msg):
         return formatTime() + ":" + msg
+
+    def get_lock_file(self, to):
+        return '/tmp/mdw_qb_' + to + '.lock'
 
     def lock(self, sign):
         l = self.get_lock_file(sign)
@@ -202,14 +253,31 @@ class downloadBT(Thread):
         return False
 
     def ffmpeg_file_sync(self):
-        print 'file_sync... start'
-
-        runDir = getRunDir()
-
         if FILE_ASYNC_SWITCH == '1':
-            self.execShell('sh -x ' + runDir+'/rsync.sh')
-        print 'file_sync... end'
+            runDir = getRunDir()
+            sign = 'sync'
 
+            print 'file_sync... start'
+            if self.islock(sign):
+                print self.debug('sync doing,already lock it!!!')
+            else:
+                self.lock(sign)
+
+                r = self.execShell('sh -x ' + runDir + '/rsync.sh')
+                print self.debug('file_sync:' + r[0])
+                print self.debug('file_sync_error:' + r[1])
+                self.unlock(sign)
+            print 'file_sync... end'
+
+    def ffmpeg_del_file(self, mp4, ts, m3u8_dir):
+        print self.debug('delete middle file ... start' + mp4)
+        self.execShell('rm -rf ' + mp4)
+        self.execShell('rm -rf ' + ts)
+
+        if os.path.exists(m3u8_dir):
+            self.execShell('rm -rf ' + m3u8_dir)
+
+        print self.debug('delete middle file ... end' + ts)
 
     def ffmpeg(self, file=''):
         if not os.path.exists(FILE_TRANSFER_TO):
@@ -222,7 +290,6 @@ class downloadBT(Thread):
             print formatTime(), 'file not exists:', file
             return
         print self.debug('source file ' + file)
-
 
         mp4file = self.get_transfer_mp4_file(md5file)
         cmd_mp4 = self.fg_transfer_mp4_cmd(file, mp4file)
@@ -264,15 +331,20 @@ class downloadBT(Thread):
                 print self.debug('cmd_m3u8_enc exists:' + m3u8_file)
                 print self.debug('cmd_m3u8_enc:' + cmd)
                 self.ffmpeg_file_sync()
+                self.ffmpeg_del_file(mp4file, tsfile,m3u8_dir)
                 return
 
-            
             self.execShell('mkdir -p ' + enc_dir)
             self.execShell('openssl rand  -base64 16 > ' +
                            enc_dir + '/enc.key')
             self.execShell('rm -rf ' + enc_dir + '/enc.keyinfo.txt')
 
-            fid = self.add_hash(fname, md5file)
+            try:
+                fid = self.add_hash(fname, md5Fname)
+            except Exception as e:
+                print 'add_hash_enc:'+str(e)
+                return
+            fid = self.add_hash(fname, md5Fname)
             key = self.readFile(enc_dir + '/enc.key').strip()
             self.set_hashfile_key(fid, key)
 
@@ -284,13 +356,14 @@ class downloadBT(Thread):
             self.execShell(enc_path)
             enc_iv = 'openssl rand -hex 16 >> ' + enc_dir + '/enc.keyinfo.txt'
             self.execShell(enc_iv)
-    
+
             os.system(cmd)
         else:
 
             if os.path.exists(m3u8_file):
                 print self.debug('m3u8 exists:' + tofile)
                 self.ffmpeg_file_sync()
+                self.ffmpeg_del_file(mp4file, tsfile,m3u8_dir)
                 return
 
             cmd_m3u8 = self.fg_m3u8_cmd(tsfile, m3u8_file, tofile)
@@ -298,28 +371,30 @@ class downloadBT(Thread):
             os.system(cmd_m3u8)
 
             try:
-                self.add_hash(fname, md5file)
+                self.add_hash(fname, md5Fname)
             except Exception as e:
                 print 'add_hash', str(e)
 
         self.execShell('chown -R ' + FILE_OWN + ':' +
                        FILE_GROUP + ' ' + m3u8_dir)
+        self.execShell('chmod -R 755 ' + m3u8_dir)
 
         self.ffmpeg_file_sync()
+        self.ffmpeg_del_file(mp4file, tsfile,m3u8_dir)
 
-    def get_bt_size(self):
+    def get_bt_size(self, torrent):
         total_size = '0'
-        if 'size' in self.sign_torrent:
-            total_size = str(self.sign_torrent['size'])
+        if 'size' in torrent:
+            total_size = str(torrent['size'])
 
-        if 'total_size' in self.sign_torrent:
-            total_size = str(self.sign_torrent['total_size'])
+        if 'total_size' in torrent:
+            total_size = str(torrent['total_size'])
         return total_size
 
     def get_hashlist_id(self):
         ct = formatTime()
 
-        total_size = self.get_bt_size()
+        total_size = self.get_bt_size(self.sign_torrent)
 
         shash = self.sign_torrent['hash']
         sname = self.sign_torrent['name']
@@ -331,9 +406,29 @@ class downloadBT(Thread):
             pid = str(info[0][0])
         else:
             print 'insert into pl_hash_list data'
-            pid = self.dbcurr.execute("insert into pl_hash_list (`name`,`info_hash`,`length`,`create_time`) values('" +
-                                      sname + "','" + shash + "','" + total_size + "','" + ct + "')")
+            pid = self.execute("insert into pl_hash_list (`name`,`info_hash`,`length`,`create_time`) values('" +
+                               sname + "','" + shash + "','" + total_size + "','" + ct + "')")
         return pid
+
+    def set_hashlist_status(self, torrent, status):
+        ct = formatTime()
+
+        shash = torrent['hash']
+
+        info = self.query(
+            "select id from pl_hash_list where info_hash='" + shash + "'")
+        if len(info) > 0:
+            print 'set_hashlist_status update'
+            usql = "update pl_hash_list set `status`='" + \
+                str(status) + "' where info_hash='" + shash + "'"
+            self.execute(usql)
+        else:
+            print 'set_hashlist_status insert'
+            total_size = self.get_bt_size(torrent)
+            sname = torrent['name']
+            sname = mdb.escape_string(sname)
+            return self.execute("insert into pl_hash_list (`name`,`info_hash`,`length`,`status`,`create_time`) values('" +
+                                sname + "','" + shash + "','" + total_size + "','" + str(status) + "','" + ct + "')")
 
     def get_hashfile_id(self, fname, m3u8_name, pid):
         ct = formatTime()
@@ -342,16 +437,16 @@ class downloadBT(Thread):
             "select id from pl_hash_file where name='" + fname + "' and pid='" + pid + "'")
         if len(info) == 0:
             print 'insert into pl_hash_file data !'
-            fid = self.dbcurr.execute("insert into pl_hash_file (`pid`,`name`,`m3u8`,`create_time`) values('" +
-                                      pid + "','" + fname + "','" + m3u8_name + "','" + ct + "')")
+            fid = self.execute("insert into pl_hash_file (`pid`,`name`,`m3u8`,`create_time`) values('" +
+                               pid + "','" + fname + "','" + m3u8_name + "','" + ct + "')")
         else:
             print fname, ':', m3u8_name, 'already is exists!'
             fid = str(info[0][0])
         return fid
 
     def set_hashfile_key(self, fid, key):
-        self.dbcurr.execute("update pl_hash_file set `key`='" +
-                            mdb.escape_string(key) + "' where id=" + fid)
+        self.execute("update pl_hash_file set `key`='" +
+                     mdb.escape_string(key) + "' where id=" + fid)
 
     def add_hash(self, fname, m3u8_name):
         print '-------------------------add_hash---start-----------------------'
@@ -386,33 +481,104 @@ class downloadBT(Thread):
         flist = self.file_arr(path)
         video = []
         for i in range(len(flist)):
-            t = os.path.splitext(flist[i])
-            if t[1] in self.has_suffix:
+            if self.is_video(flist[i]):
                 video.append(flist[i])
         return video
 
     def video_do(self, path):
         if os.path.isfile(path):
-            t = os.path.splitext(path)
-            if t[1] in self.has_suffix:
+            if self.is_video(path):
                 self.ffmpeg(path)
         else:
             vlist = self.find_dir_video(path)
             for v in vlist:
                 self.ffmpeg(v)
-
         return ''
 
-    def checkTask(self):
+    def is_video(self, path):
+        t = os.path.splitext(path)
+        if t[1] in self.has_suffix:
+            return True
+        return False
+
+    def non_download(self, torrent):
+        flist = self.qb.get_torrent_files(torrent['hash'])
+        is_video = False
+        for pos in range(len(flist)):
+            file = torrent['save_path'] + flist[pos]['name']
+            if not self.is_video(file):
+                self.qb.set_file_priority(torrent['hash'], pos, 0)
+            else:
+                is_video = True
+
+        # is video
+        if not is_video:
+            self.set_status(torrent, 1)
+
+    def set_status(self, torrent, status):
+        self.set_hashlist_status(torrent, status)
+        if TASK_DEBUG == 0 and status != 0:
+            self.qb.delete_permanently(torrent['hash'])
+
+    def is_downloading(self, torrent):
+        if torrent['name'] == torrent['hash']:
+            return True
+        else:
+            return False
+
+    def is_nondownload_overtime(self, torrent, sec):
+        ct = time.time()
+        use_time = int(ct) - int(torrent['added_on'])
+
+        flist = self.qb.get_torrent_files(torrent['hash'])
+        # print flist
+        flist_len = len(flist)
+        # 没有获取种子信息
+        # print 'ddd:',flist_len,use_time,sec
+        if flist_len == 0 and use_time > sec:
+            self.set_status(torrent, 2)
+            return True
+
+        is_video_download = False
+
+        # 获取了种子信息,但是没有下载
+        for pos in range(len(flist)):
+            file = torrent['save_path'] + flist[pos]['name']
+            if self.is_video(file):
+                if flist[pos]['progress'] != '0':
+                    is_video_download = True
+
+        if not is_video_download and use_time > sec:
+            self.set_status(torrent, 3)
+            return True
+        return False
+
+    def is_downloading_overtime(self, torrent, sec):
+        ct = time.time()
+        use_time = int(ct) - int(torrent['added_on'])
+        if use_time > sec:
+            self.set_status(torrent, 4)
+            return True
+        return False
+
+    def check_task(self):
         while True:
             torrents = self.qb.torrents(filter='downloading')
             tlen = len(torrents)
             if tlen > 0:
                 print "downloading torrents count:", tlen
                 for torrent in torrents:
+                    if self.is_nondownload_overtime(torrent, 5 * 60):
+                        pass
+                    elif self.is_downloading_overtime(torrent, 7 * 24 * 60 * 60):
+                        pass
+                    elif self.is_downloading(torrent):
+                        pass
+                    else:
+                        self.non_download(torrent)
                     print torrent['name'], ' task downloading!'
             else:
-                print formatTime(), "no downloading task!"
+                print self.debug("no downloading task!")
             time.sleep(TASK_RATE)
 
     def completed(self):
@@ -432,16 +598,49 @@ class downloadBT(Thread):
                             self.qb.delete_permanently(torrent['hash'])
                     except Exception as e:
                         print formatTime(), str(e)
-
-                print formatTime(), "done task!"
+                print self.debug("done task!")
             else:
-                print formatTime(), "no completed task!"
+                print self.debug("no completed task!")
             time.sleep(TASK_COMPLETED_RATE)
+
+    def add_hash_task(self, shash):
+        url = 'magnet:?xt=urn:btih:' + shash
+        self.qb.download_from_link(url)
+        print self.debug('queue add_hash_task is ok ... ')
+
+    def queue(self):
+        while True:
+            if QUEUE_SWITCH == '1':
+                print self.debug("------------ do queue task start! ---------------")
+
+                setting = self.qb.preferences()
+                torrents = self.qb.torrents()
+                tlen = len(torrents)
+                # print tlen, setting['max_active_torrents']
+                add = int(setting['max_active_torrents']) - tlen
+
+                if add == 0:
+                    print self.debug('the download queue is full ... ')
+                else:
+                    sql = "select * from pl_hash_queue order by created_at limit " + \
+                        str(add)
+                    info = self.query(sql)
+                    info_len = len(info)
+
+                    if info_len == 0:
+                        print self.debug('queue data is empty ... ')
+                    else:
+                        for x in range(info_len):
+                            self.add_hash_task(info[x][1])
+                            self.execute(
+                                'delete from pl_hash_queue where id=' + str(info[x][0]))
+                        print self.debug("------------ do queue task end ! ---------------")
+            time.sleep(TASK_RATE)
 
 
 def test():
     while True:
-        print formatTime(), "no download task!",
+        print self.debug("no download task!")
         time.sleep(1)
         test()
 
@@ -450,8 +649,11 @@ if __name__ == "__main__":
     dl = downloadBT()
 
     import threading
-    task = threading.Thread(target=dl.checkTask)
-    task.start()
+    check_task = threading.Thread(target=dl.check_task)
+    check_task.start()
 
     completed = threading.Thread(target=dl.completed)
     completed.start()
+
+    queue = threading.Thread(target=dl.queue)
+    queue.start()

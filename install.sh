@@ -18,7 +18,7 @@ Install_mac_ffmpeg()
 		wget -O $serverPath/source/ffmpeg-20180702-3c4af57-macos64-static.zip https://ffmpeg.zeranoe.com/builds/macos64/static/ffmpeg-20180702-3c4af57-macos64-static.zip
 	fi
 
-	if [ ! -f $serverPath/lib/ffmpeg ];then
+	if [ ! -d $serverPath/lib/ffmpeg ];then
 		cd $serverPath/source && tar -xvf $serverPath/source/ffmpeg-20180702-3c4af57-macos64-static.zip
 		mv ffmpeg-20180702-3c4af57-macos64-static $serverPath/lib/ffmpeg
 	fi
@@ -30,7 +30,7 @@ Install_linux_ffmpeg()
 		wget -O $serverPath/source/ffmpeg-release-amd64-static.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
 	fi
 
-	if [ ! -f $serverPath/lib/ffmpeg ];then
+	if [ ! -d $serverPath/lib/ffmpeg ];then
 		cd $serverPath/source && tar -xvf $serverPath/source/ffmpeg-release-amd64-static.tar.xz
 		mv ffmpeg-4.1.2-amd64-static $serverPath/lib/ffmpeg
 	fi
@@ -47,7 +47,7 @@ Install_qbittorrent()
 		Install_linux_ffmpeg
 	fi
 
-	pip install python-qbittorrent
+	pip install python-qbittorrent==0.2
 
 	echo '正在安装脚本文件...' > $install_tmp
 	mkdir -p $serverPath/qbittorrent

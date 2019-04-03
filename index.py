@@ -73,6 +73,11 @@ def getSqlFile():
     return file
 
 
+def getRsyncShell():
+    file = getServerDir() + "/workers/rsync.sh"
+    return file
+
+
 def getConf():
     file = getServerDir() + "/qb.conf"
     return file
@@ -130,11 +135,15 @@ def status():
 
 
 def start():
+
+    cmd = "ps -ef | grep qbittorrent-nox |grep -v grep |awk '{print $2}'"
+    ret = public.execShell(cmd)
+    if ret[0] == '':
+        public.execShell('qbittorrent-nox -d')
+
     file = initDreplace()
 
     data = public.execShell(file + ' start')
-
-    # public.execShell('qbittorrent-nox -d')
     if data[1] == '':
         return 'ok'
     return data[1]
@@ -143,7 +152,8 @@ def start():
 def stop():
     file = initDreplace()
     data = public.execShell(file + ' stop')
-    # public.execShell('ps -ef | grep qbittorrent-nox | xargs kill ')
+    # cmd = "ps -ef | grep qbittorrent-nox |grep -v grep |awk '{print $2}' | xargs kill"
+    # public.execShell(cmd)
     if data[1] == '':
         return 'ok'
     return data[1]
@@ -327,6 +337,8 @@ if __name__ == "__main__":
         print initdUinstall()
     elif func == 'get_sql':
         print getSqlFile()
+    elif func == 'rsync_shell':
+        print getRsyncShell()
     elif func == 'conf':
         print getConf()
     elif func == 'get_run_Log':

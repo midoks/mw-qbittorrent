@@ -3,6 +3,7 @@ CREATE TABLE `pl_hash_list` (
   `name` text NOT NULL,
   `info_hash` varchar(40) NOT NULL,
   `length` bigint(20) NOT NULL,
+  `status` char(10) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL,
   `create_time` datetime NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `info_hash` (`info_hash`),
@@ -23,8 +24,9 @@ CREATE TABLE `pl_hash_file` (
 
 CREATE TABLE `pl_hash_queue` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT,
-  `info_hash` varchar(40) NOT NULL,
-  `create_time` datetime NOT NULL,
+  `info_hash` char(40) NOT NULL,
+  `create_at` datetime NOT NULL,
+  `update_at` datetime NOT NULL,
   PRIMARY KEY (`id`),
-  KEY `create_time` (`create_time`)
+  KEY `create_at` (`create_at`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
